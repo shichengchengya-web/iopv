@@ -32,7 +32,7 @@ def fetch_qdii_data():
         print(f"Fetching {name} ({symbol})...")
         try:
             ticker = yf.Ticker(symbol)
-            df = ticker.history(period="30d", interval="1m")
+            df = ticker.history(period="30d", interval="30m")
             
             if df.empty:
                 print(f"Warning: {name} no data, skipping")
@@ -43,11 +43,9 @@ def fetch_qdii_data():
             # Convert to Beijing time
             df.index = df.index.tz_convert('Asia/Shanghai')
             
-            # Resample to 30 min candles
-            df_30m = df['Close'].resample('30T').last().ffill()
-            
-            # Merge data
+            df_30m = df['Close']
             df_30m.name = name
+            
             if all_data.empty:
                 all_data = df_30m.to_frame()
             else:
@@ -58,6 +56,12 @@ def fetch_qdii_data():
 
     if all_data.empty:
         print("Error: All tickers failed. Check network or yfinance status")
+        os.makedirs("output", exist_ok=True)
+        bj_now = datetime.now(pytz.timezone('Asia/Shanghai'))
+        date_str = bj_now.strftime("%Y%m%d")
+        with open(os.path.join("output", f"qdii_30m_{date_str}_empty.csv"), "w") as f:
+            f.write("date,message\n")
+            f.write(f"{bj_now.isoformat()},No data available\n")
         return
 
     # Save by date
