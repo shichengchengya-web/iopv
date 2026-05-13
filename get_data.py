@@ -1,100 +1,71 @@
+# get_close_prices.py
 import yfinance as yf
 import pandas as pd
-import os
 from datetime import datetime, timedelta
-import pytz
-import time
+import os
 
-def fetch_qdii_daily():
-    """
-    获取QDII相关品种的日线收盘价（近60个自然日）
-    - 时间统一转为北京时间
-    - 只保留 Close 列
-    - 输出到 output/qdii_daily_{date}.csv
-    """
-    tickers = {
-        "CRUD.L": "CRUD.L",
-        "BRNT.L": "BRNT.L",
-        "DBO": "DBO",
-        "BNO": "BNO",
-        "USO": "USO",
-        "3175.HK": "3175.HK",
-        "IAU": "IAU",
-        "GLD": "GLD",
-        "AAAU": "AAAU",
-        "SGOL": "SGOL",
-        "FTGC": "FTGC",
-        "BCD": "BCD",
-        "SLV": "SLV",
-        "hf_CL": "CL=F",
-        "hf_OIL": "BZ=F",
-        "hf_GC": "GC=F",
-        "hf_SI": "SI=F"
-    }
+# ====================== 配置 ======================
+tickers = {
+    # ETF
+    "CRUD.L": "CRUD.L",
+    "BRNT.L": "BRNT.L",
+    "DBO": "DBO",
+    "BNO": "BNO",
+    "USO": "USO",
+    "3175.HK": "3175.HK",
+    # 对应期货（用于T日跟踪）
+    "CL=F": "CL=F",      # WTI
+    "BZ=F": "BZ=F",      # Brent
+}
 
-    os.makedirs("output", exist_ok=True)
-    bj_now = datetime.now(pytz.timezone('Asia/Shanghai'))
-    date_str = bj_now.strftime("%Y%m%d")
-    output_file = os.path.join("output", f"qdii_daily_{date_str}.csv")
+os.makedirs("output", exist_ok=True)
+date_str = datetime.now().strftime("%Y%m%d")
+output_file = f"output/qdii_close_{date_str}.csv"
 
-    # 近60个自然日
-    end_date = bj_now
-    start_date = end_date - timedelta(days=60)
-    print(f"[{bj_now.strftime('%Y-%m-%d %H:%M:%S')} BJ] Fetching daily data from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')} (Beijing time)")
-    print(f"[{bj_now.strftime('%Y-%m-%d %H:%M:%S')} BJ] Output: {output_file}")
+print("开始获取收盘价数据（用于 T-1 计算）...\n")
 
-    new_data_list = []
-    success_count = 0
+data_list = []
 
-    for name, symbol in tickers.items():
-        print(f"  Fetching {name} ({symbol})...", end=" ", flush=True)
-        try:
-            ticker = yf.Ticker(symbol)
-            # 日线收盘价
-            df = ticker.history(start=start_date, end=end_date, interval="1d")
+for name, symbol in tickers.items():
+    print(f"获取 {name:8} ({symbol}) ...", end=" ")
+    try:
+        df = yf.download(
+            symbol,
+            period="60d",           # 近60天
+            interval="1d",          # 先用日线，保证收盘价完整
+            auto_adjust=True,
+            progress=False
+        )
+        
+        if df.empty:
+            print("无数据")
+            continue
+            
+        df = df[['Close']].copy()
+        df.columns = [name]
+        data_list.append(df)
+        print(f"成功 ({len(df)} 条)")
+        
+    except Exception as e:
+        print(f"失败: {e}")
 
-            if df.empty:
-                print("no data")
-                continue
+if not data_list:
+    print("全部失败")
+    exit()
 
-            # 只保留 Close 列
-            df = df[['Close']].copy()
-            # 统一转为北京时间
-            df.index = df.index.tz_convert('Asia/Shanghai')
-            df.index.name = 'Datetime'
-            df.columns = [name]
+# 合并
+combined = pd.concat(data_list, axis=1)
+combined = combined.sort_index()
 
-            new_data_list.append(df)
-            print(f"OK ({len(df)} rows)")
-            success_count += 1
+# 保存
+combined.to_csv(output_file, encoding='utf-8-sig')
+print(f"\n✅ 收盘价数据获取完成！")
+print(f"文件路径: {output_file}")
+print(f"总行数: {len(combined)}")
+print(f"时间范围: {combined.index.min()} ~ {combined.index.max()}")
+print("\n最后5条预览:")
+print(combined.tail())
 
-            # 速率保护
-            time.sleep(0.5)
-
-        except Exception as e:
-            print(f"Error: {e}")
-
-    if not new_data_list:
-        print("[ERROR] All tickers failed. Check network or yfinance status.")
-        return
-
-    # 合并所有品种
-    combined = pd.concat(new_data_list, axis=1)
-    # 按时间升序排列（从旧到新）
-    combined = combined.sort_index(ascending=True)
-    # 时区标注为北京时间
-    combined.index = combined.index.strftime('%Y-%m-%d %H:%M:%S+08:00')
-    combined.index.name = 'Datetime'
-
-    # 保存
-    combined.to_csv(output_file)
-    print(f"\n--- Done ---")
-    print(f"Saved to: {output_file}")
-    print(f"Date range: {combined.index[0]} ~ {combined.index[-1]}")
-    print(f"Total rows: {len(combined)}")
-    print(f"Total tickers: {len(combined.columns)}")
-    print(f"Tickers with data: {success_count}/{len(tickers)}")
-
-
-if __name__ == "__main__":
-    fetch_qdii_daily()
+# 同时保存一份方便查看的 Excel
+combined.to_excel(f"output/qdii_close_{date_str}.xlsx")
+print(f"已同时生成 Excel 文件")
