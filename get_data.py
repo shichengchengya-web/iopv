@@ -8,13 +8,13 @@ import random
 
 def fetch_qdii_daily():
     """
-    获取QDII日线收盘价 (1d)
-    - 严格锁定日线 interval="1d"
-    - 统一转为北京时间 (+08:00) 标注
-    - 仅保留 Close 列
+    获取QDII ETF及对应期货日线数据
+    - 统一使用 interval="1d"
+    - 4个核心期货：WTI(CL=F), 布油(BZ=F), 黄金(GC=F), 白银(SI=F)
+    - 自动通过 ffill() 实现 ETF 收盘时刻的期货锚点对齐
     """
-    # 纯 ETF 列表（期货由你后续单独处理）
     tickers = {
+        # ETF 部分
         "CRUD.L": "CRUD.L",
         "BRNT.L": "BRNT.L",
         "DBO": "DBO",
@@ -28,23 +28,21 @@ def fetch_qdii_daily():
         "FTGC": "FTGC",
         "BCD": "BCD",
         "SLV": "SLV",
-        "hf_SI": "hf_SI",
-        "hf_GC": "hf_GC",
-        "hf_OIL": "hf_OIL",
-        "hf_CL": "hf_CL"
+        # 期货部分 (用于锚点对齐)
+        "hf_CL": "CL=F",   # WTI原油期货
+        "hf_OIL": "BZ=F",  # 布伦特原油期货
+        "hf_GC": "GC=F",   # 黄金期货
+        "hf_SI": "SI=F"    # 白银期货
     }
 
     os.makedirs("output", exist_ok=True)
     bj_tz = pytz.timezone('Asia/Shanghai')
     bj_now = datetime.now(bj_tz)
-    date_str = bj_now.strftime("%Y%m%d")
-    output_file = os.path.join("output", f"qdii_daily_{date_str}.csv")
-
-    # 近60天日线
+    # 抓取近60天数据
     end_date = bj_now
     start_date = end_date - timedelta(days=60)
     
-    print(f"[{bj_now.strftime('%Y-%m-%d %H:%M:%S')}] Fetching Daily Close (interval='1d')...")
+    print(f"[{bj_now.strftime('%Y-%m-%d %H:%M:%S')}] Fetching ETF and Futures (1d)...")
 
     new_data_list = []
     
@@ -52,50 +50,47 @@ def fetch_qdii_daily():
         print(f"  Fetching {name}...", end=" ", flush=True)
         try:
             ticker = yf.Ticker(symbol)
-            # 严格使用 1d 频率
+            # 统一使用日线
             df = ticker.history(start=start_date, end=end_date, interval="1d")
 
             if df.empty:
                 print("no data")
                 continue
 
-            # 提取收盘价
             df = df[['Close']].copy()
-            # 转换为北京时间
+            # 统一转为北京时间
             df.index = df.index.tz_convert('Asia/Shanghai')
             df.columns = [name]
-            
             new_data_list.append(df)
-            print(f"OK ({len(df)} rows)")
+            print(f"OK")
             
-            # 随机延迟，降低被封风险
-            time.sleep(random.uniform(1.5, 3.0))
+            # 保护性延迟
+            time.sleep(random.uniform(1.0, 2.0))
 
         except Exception as e:
             print(f"Error: {e}")
 
     if not new_data_list:
-        print("Error: No data fetched.")
         return
 
-    # 合并所有 ETF 数据
+    # 合并数据
     combined = pd.concat(new_data_list, axis=1)
     
-    # 按时间升序并填充缺失值（防止因两地市场休市日期不同导致的空行）
+    # 【核心逻辑】按时间排序并向下填充
+    # 这会确保某天如果只有期货有值、ETF没值（休市），ETF会沿用前一天价格
+    # 反之，某时刻ETF收盘的价格会与当时已知的最新期货价格对齐在同一行
     combined = combined.sort_index(ascending=True).ffill()
     
-    # 格式化索引：2026-05-13 00:00:00+08:00
+    # 格式化日期戳
     combined.index = combined.index.strftime('%Y-%m-%d %H:%M:%S+08:00')
     combined.index.name = 'Datetime'
-    
-    # 只保存一个固定名称的文件，实时程序永远只读这一个
-    combined.to_csv(os.path.join("output", "qdii_daily_latest.csv"))
-    
-    print(f"\n--- Done ---")
-    print(f"Daily Close saved to: output/qdii_daily_latest.csv")
+
+    # 仅输出一个固定名称的最新文件，保持仓库整洁
+    output_file = os.path.join("output", "qdii_daily_latest.csv")
+    combined.to_csv(output_file)
     
     print(f"\n--- Done ---")
-    print(f"Daily Close saved to: {output_file}")
+    print(f"File saved to: {output_file}")
 
 if __name__ == "__main__":
     fetch_qdii_daily()
