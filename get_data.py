@@ -3,6 +3,7 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta
 import pytz
+import time
 
 def fetch_qdii_data():
     tickers = {
@@ -38,7 +39,7 @@ def fetch_qdii_data():
         existing_data = pd.DataFrame()
         print("No existing data, will fetch full history")
 
-    # Get date range
+    # Get date range - last 7 days
     end_date = bj_now
     start_date = end_date - timedelta(days=7)
     print(f"Fetching data from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
@@ -49,7 +50,8 @@ def fetch_qdii_data():
         print(f"Fetching {name} ({symbol})...")
         try:
             ticker = yf.Ticker(symbol)
-            df = ticker.history(start=start_date, end=end_date, interval="15m")
+            # Use 5m interval and resample to 30m for more complete data
+            df = ticker.history(start=start_date, end=end_date, interval="5m")
             
             if df.empty:
                 print(f"Warning: {name} no data, skipping")
@@ -58,10 +60,14 @@ def fetch_qdii_data():
             df = df[['Close']]
             df.index = df.index.tz_convert('Asia/Shanghai')
             
-            df_30m = df['Close']
+            # Resample 5m to 30m
+            df_30m = df['Close'].resample('30T').last().ffill()
             df_30m.name = name
             new_data_list.append(df_30m)
             
+            # Rate limit protection
+            time.sleep(0.5)
+                
         except Exception as e:
             print(f"Error fetching {name}: {e}")
 
@@ -72,7 +78,7 @@ def fetch_qdii_data():
     # Merge new data
     new_data = pd.concat(new_data_list, axis=1)
     
-    # Filter to last 2 days only to avoid huge files
+    # Filter to last 2 days
     cutoff = bj_now - timedelta(days=2)
     new_data = new_data[new_data.index >= cutoff]
     print(f"New data (last 2 days): {len(new_data)} rows")
@@ -80,7 +86,6 @@ def fetch_qdii_data():
     # Merge with existing, drop duplicates (keep newer)
     if not existing_data.empty:
         combined = pd.concat([existing_data, new_data])
-        # Remove duplicates, keeping the last occurrence (newer data)
         combined = combined[~combined.index.duplicated(keep='last')]
         combined = combined.sort_index(ascending=False)
     else:
