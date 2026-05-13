@@ -49,7 +49,7 @@ def fetch_qdii_data():
         print(f"Fetching {name} ({symbol})...")
         try:
             ticker = yf.Ticker(symbol)
-            df = ticker.history(start=start_date, end=end_date, interval="30m")
+            df = ticker.history(start=start_date, end=end_date, interval="15m")
             
             if df.empty:
                 print(f"Warning: {name} no data, skipping")
