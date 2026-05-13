@@ -1,0 +1,38 @@
+name: Fetch YFinance Data
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 北京时间每天 09:00 = UTC 01:00
+    - cron: '0 1 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖
+        run: pip install yfinance pandas
+
+      - name: 执行抓取脚本
+        run: python get_data.py
+
+      - name: 提交并推送数据
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git config --global init.defaultBranch output
+          git checkout --orphan output || git checkout output
+          git add output/oil_minute_data.csv
+          git commit -m "Update data: $(date)" || exit 0
+          git push -f origin output
