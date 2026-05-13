@@ -1,71 +1,102 @@
-# get_close_prices.py
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, timedelta
 import os
+from datetime import datetime, timedelta
+import pytz
+import time
+import random
 
-# ====================== 配置 ======================
-tickers = {
-    # ETF
-    "CRUD.L": "CRUD.L",
-    "BRNT.L": "BRNT.L",
-    "DBO": "DBO",
-    "BNO": "BNO",
-    "USO": "USO",
-    "3175.HK": "3175.HK",
-    # 对应期货（用于T日跟踪）
-    "CL=F": "CL=F",      # WTI
-    "BZ=F": "BZ=F",      # Brent
-}
+def fetch_qdii_daily():
+    """
+    获取QDII相关品种数据并自动匹配跨时区锚点
+    - 时间统一转为北京时间 (UTC+8)
+    - 自动识别纽约夏令时/冬令时锚点
+    - 输出到 output/qdii_anchor_latest.csv
+    """
+    # 你的持仓与期货映射表
+    tickers = {
+        "CRUD.L": "CRUD.L",  # 伦敦 ETF
+        "BRNT.L": "BRNT.L",
+        "DBO": "DBO",        # 纽约 ETF
+        "BNO": "BNO",
+        "USO": "USO",
+        "3175.HK": "3175.HK",
+        "IAU": "IAU",
+        "hf_CL": "CL=F",     # WTI 期货
+        "hf_OIL": "BZ=F",    # 布油期货
+        "hf_GC": "GC=F"
+    }
 
-os.makedirs("output", exist_ok=True)
-date_str = datetime.now().strftime("%Y%m%d")
-output_file = f"output/qdii_close_{date_str}.csv"
+    os.makedirs("output", exist_ok=True)
+    bj_tz = pytz.timezone('Asia/Shanghai')
+    bj_now = datetime.now(bj_tz)
+    date_str = bj_now.strftime("%Y%m%d")
+    output_file = os.path.join("output", f"qdii_daily_{date_str}.csv")
+    latest_file = os.path.join("output", "qdii_anchor_latest.csv") # 软链接式命名，方便实时程序读取
 
-print("开始获取收盘价数据（用于 T-1 计算）...\n")
+    # 抓取近60天数据
+    end_date = bj_now + timedelta(days=1)
+    start_date = bj_now - timedelta(days=60)
+    
+    print(f"[{bj_now.strftime('%Y-%m-%d %H:%M:%S')} BJ] Starting Fetching...")
 
-data_list = []
+    new_data_list = []
+    
+    for name, symbol in tickers.items():
+        print(f"  Fetching {name}...", end=" ", flush=True)
+        try:
+            ticker = yf.Ticker(symbol)
+            # 使用1小时或1日线，这里建议用1h以确保能匹配到凌晨的锚点
+            df = ticker.history(start=start_date, end=end_date, interval="60m")
 
-for name, symbol in tickers.items():
-    print(f"获取 {name:8} ({symbol}) ...", end=" ")
-    try:
-        df = yf.download(
-            symbol,
-            period="60d",           # 近60天
-            interval="1d",          # 先用日线，保证收盘价完整
-            auto_adjust=True,
-            progress=False
-        )
-        
-        if df.empty:
-            print("无数据")
-            continue
+            if df.empty:
+                print("no data")
+                continue
+
+            df = df[['Close']].copy()
+            df.index = df.index.tz_convert('Asia/Shanghai')
+            df.columns = [name]
+            new_data_list.append(df)
+            print(f"OK")
             
-        df = df[['Close']].copy()
-        df.columns = [name]
-        data_list.append(df)
-        print(f"成功 ({len(df)} 条)")
-        
-    except Exception as e:
-        print(f"失败: {e}")
+            # 随机延迟，防止GitHub IP被封
+            time.sleep(random.uniform(1.0, 3.0))
 
-if not data_list:
-    print("全部失败")
-    exit()
+        except Exception as e:
+            print(f"Error: {e}")
 
-# 合并
-combined = pd.concat(data_list, axis=1)
-combined = combined.sort_index()
+    if not new_data_list:
+        return
 
-# 保存
-combined.to_csv(output_file, encoding='utf-8-sig')
-print(f"\n✅ 收盘价数据获取完成！")
-print(f"文件路径: {output_file}")
-print(f"总行数: {len(combined)}")
-print(f"时间范围: {combined.index.min()} ~ {combined.index.max()}")
-print("\n最后5条预览:")
-print(combined.tail())
+    # 合并并处理缺失值
+    combined = pd.concat(new_data_list, axis=1)
+    combined = combined.sort_index(ascending=True).ffill() 
 
-# 同时保存一份方便查看的 Excel
-combined.to_excel(f"output/qdii_close_{date_str}.xlsx")
-print(f"已同时生成 Excel 文件")
+    # --- 锚点提取逻辑 ---
+    # 纽约锚点自动识别 (纽约 16:00 收盘时对应的北京时间)
+    ny_tz = pytz.timezone('America/New_York')
+    # 模拟昨天的收盘时间点
+    yesterday = bj_now - timedelta(days=1)
+    ny_close_local = ny_tz.localize(datetime(yesterday.year, yesterday.month, yesterday.day, 16, 0))
+    ny_anchor_bj = ny_close_local.astimezone(bj_tz).strftime("%H:%M")
+    
+    # 伦敦锚点通常固定 (伦敦 16:30 收盘对应北京 00:30 或 23:30)
+    # 此处假设你主要关注的是 00:30
+    lse_anchor_bj = "00:30"
+
+    print(f"\n[Anchor Check] NY Close (BJ Time): {ny_anchor_bj}")
+    print(f"[Anchor Check] LSE Close (BJ Time): {lse_anchor_bj}")
+
+    # 转换索引格式方便保存
+    combined.index = combined.index.strftime('%Y-%m-%d %H:%M:%S+08:00')
+
+    # 保存每日文件
+    combined.to_csv(output_file)
+    # 保存最新一份，实时程序固定读取这个文件名
+    combined.to_csv(latest_file)
+    
+    print(f"\n--- Done ---")
+    print(f"Files saved in /output/ folder.")
+
+if __name__ == "__main__":
+    fetch_qdii_daily()
