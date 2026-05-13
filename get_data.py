@@ -1,10 +1,10 @@
 """
 get_data.py - LOF 溢价监控原油期货数据采集
 功能：
-  1. 首次运行：拉取 CL=F (WTI) + BZ=F (布伦特) 近 30 天分钟线
-  2. 后续运行：增量追加最近 2 天数据，按 timestamp 去重
+  1. 首次运行：拉取 CL=F (WTI) + BZ=F (布伦特) 近 7 天分钟线
+  2. 后续运行：增量追加最近 5 天数据，按 timestamp 去重
 输出：output/oil_minute_data.csv
-  列：timestamp, CL_close, BZ_close
+  列：timestamp, CL=F, BZ=F
 """
 
 import yfinance as yf
@@ -44,12 +44,17 @@ def fetch_initial_data() -> pd.DataFrame:
 
 
 def fetch_recent_data(existing_df: pd.DataFrame) -> pd.DataFrame:
-    """后续运行：拉取最近 2 天数据，增量追加"""
+    """后续运行：拉取最近 5 天数据，增量追加"""
+    # 统一将已有数据的索引转为 tz-naive UTC
+    if existing_df.index.tz is not None:
+        existing_df = existing_df.copy()
+        existing_df.index = existing_df.index.tz_convert("UTC").tz_localize(None)
+
     dfs = []
     for ticker_sym in TICKERS:
-        print(f"  获取 {ticker_sym} 最近 2 天数据...")
+        print(f"  获取 {ticker_sym} 近 5 天数据...")
         ticker = yf.Ticker(ticker_sym)
-        df = ticker.history(period="2d", interval="1m")
+        df = ticker.history(period="5d", interval="1m")
         if df.empty:
             print(f"  警告：{ticker_sym} 未获取到数据，跳过")
             continue
@@ -71,13 +76,27 @@ def fetch_recent_data(existing_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def deduplicate(df: pd.DataFrame) -> pd.DataFrame:
-    """按 timestamp 去重，保留每条记录最新值"""
+    """按 timestamp 去重，保留每条记录最新值
+
+    先将索引转为 tz-naive UTC，再去重排序。
+    避免 pd.concat 后 tz-naive 与 tz-aware 混在一起导致 sort 报错。
+    """
+    # 将索引转为 tz-naive UTC（try/except 处理 Index 类型无 tz 属性的情况）
+    try:
+        if df.index.tz is not None:
+            df = df.copy()
+            df.index = df.index.tz_convert("UTC").tz_localize(None)
+    except AttributeError:
+        # 非 DatetimeIndex（如 concat 后变成 object Index），直接转
+        df = df.copy()
+        df.index = pd.to_datetime(df.index, utc=True).tz_localize(None)
+
     before = len(df)
     df = df[~df.index.duplicated(keep="last")]
     after = len(df)
     if before != after:
         print(f"  去重：{before} → {after}（移除 {before - after} 条重复）")
-    return df.sort_index()  # 按时间升序排列
+    return df.sort_index()
 
 
 def save_csv(df: pd.DataFrame):
