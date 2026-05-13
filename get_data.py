@@ -27,7 +27,11 @@ def fetch_qdii_daily():
         "SGOL": "SGOL",
         "FTGC": "FTGC",
         "BCD": "BCD",
-        "SLV": "SLV"
+        "SLV": "SLV",
+        "hf_SI": "hf_SI",
+        "hf_GC": "hf_GC",
+        "hf_OIL": "hf_OIL",
+        "hf_CL": "hf_CL"
     }
 
     os.makedirs("output", exist_ok=True)
