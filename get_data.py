@@ -83,11 +83,12 @@ def fetch_qdii_daily():
     # 格式化索引：2026-05-13 00:00:00+08:00
     combined.index = combined.index.strftime('%Y-%m-%d %H:%M:%S+08:00')
     combined.index.name = 'Datetime'
-
-    # 保存
-    combined.to_csv(output_file)
-    # 同时保留一个固定名称，方便后续程序直接调用
+    
+    # 只保存一个固定名称的文件，实时程序永远只读这一个
     combined.to_csv(os.path.join("output", "qdii_daily_latest.csv"))
+    
+    print(f"\n--- Done ---")
+    print(f"Daily Close saved to: output/qdii_daily_latest.csv")
     
     print(f"\n--- Done ---")
     print(f"Daily Close saved to: {output_file}")
