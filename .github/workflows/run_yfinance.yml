@@ -3,7 +3,7 @@ name: Fetch QDII Data
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 1 * * 1-5' # Beijing Mon-Fri 09:00
+    - cron: '0 1 * * 1-5' # 北京时间周一至周五 09:00
 
 jobs:
   fetch-job:
@@ -27,12 +27,13 @@ jobs:
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
-          # Check if there are any CSV files
-          if ls output/*.csv 1> /dev/null 2>&1; then
-            git add output/*.csv
-            git commit -m "Auto-update QDII Data: $(date)" || true
-            git pull --rebase origin main || true
-            git push origin main || true
+          
+          # 仅处理固定命名的最新数据文件
+          if [ -f output/qdii_daily_latest.csv ]; then
+            git add output/qdii_daily_latest.csv
+            git commit -m "Update QDII Latest: $(date +'%Y-%m-%d %H:%M')" || exit 0
+            git pull --rebase origin main
+            git push origin main
           else
-            echo "No CSV files to commit"
+            echo "qdii_daily_latest.csv not found"
           fi
