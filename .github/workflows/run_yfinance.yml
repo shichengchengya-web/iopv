@@ -1,38 +1,34 @@
-name: Fetch YFinance Data
+name: Fetch QDII Data
 
 on:
   workflow_dispatch:
   schedule:
-    # 北京时间每天 09:00 = UTC 01:00
-    - cron: '0 1 * * *'
-
-permissions:
-  contents: write
+    - cron: '0 1 * * 1-5' # 鍖椾含鏃堕棿鍛ㄤ竴鑷冲懆浜?09:00
 
 jobs:
   fetch-job:
     runs-on: ubuntu-latest
     steps:
-      - name: 检出代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 安装 Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: 安装依赖
-        run: pip install yfinance pandas
+      - name: Install dependencies
+        run: pip install yfinance pandas pytz
 
-      - name: 执行抓取脚本
+      - name: Run script
         run: python get_data.py
 
-      - name: 提交并推送数据
+      - name: Push results
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
-          git config --global init.defaultBranch output
-          git checkout --orphan output || git checkout output
-          git add output/oil_minute_data.csv
-          git commit -m "Update data: $(date)" || exit 0
-          git push -f origin output
+          # 鍏抽敭鐐癸細娣诲姞 output 涓嬫墍鏈夌殑 csv 鏂囦欢
+          git add output/*.csv
+          git commit -m "Auto-update QDII Data: $(date)" || exit 0
+          git pull --rebase origin main
+          git push origin main
