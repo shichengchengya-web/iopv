@@ -1,7 +1,7 @@
 # get_market_close_prices_final.py
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 import os
 import traceback
@@ -9,150 +9,110 @@ import sys
 
 LOG_FILE = "output/fetch_log.txt"
 
-def log(msg):
-    """同时打印和写入日志文件"""
+def log(msg=""):
     print(msg)
+    os.makedirs("output", exist_ok=True)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(f"[{datetime.now().isoformat()}] {msg}\n")
 
-def is_us_summer_time(dt):
-    """判断是否为美国夏令时（3月第二个周日 ~ 11月第一个周日，简化版）"""
-    return 3 < dt.month < 11   # 5月份肯定是夏令时
+log("=" * 50)
+log("开始获取 QDII 数据")
+log("=" * 50)
 
-def fetch_market_close_prices():
-    """
-    按各市场真实收盘时间提取价格（强烈推荐用于 T-1 净值计算）
-    """
-    tickers_config = {
-        # 伦敦 LSE ≈ 北京时间 00:30
-        "CRUD.L": {"symbol": "CRUD.L", "market": "London",  "close_time": "00:30"},
-        "BRNT.L": {"symbol": "BRNT.L", "market": "London",  "close_time": "00:30"},
+tickers_config = {
+    # 伦敦 LSE (北京 00:30 → UTC 前一天 16:30)
+    "CRUD.L":  {"market": "London",  "close_utc_hour": 16, "close_utc_min": 30},
+    "BRNT.L":  {"market": "London",  "close_utc_hour": 16, "close_utc_min": 30},
+    # 纽约 NYSE (北京 04:00 → UTC 前一天 20:00， 夏令时 19:00)
+    "DBO":     {"market": "NewYork", "close_utc_hour": 20, "close_utc_min": 0,  "dst": True},
+    "BNO":     {"market": "NewYork", "close_utc_hour": 20, "close_utc_min": 0,  "dst": True},
+    "USO":     {"market": "NewYork", "close_utc_hour": 20, "close_utc_min": 0,  "dst": True},
+    # 首尔/香港
+    "3175.HK": {"market": "Seoul",   "close_utc_hour": 5,  "close_utc_min": 30},
+}
 
-        # 纽约 NYSE
-        "DBO":    {"symbol": "DBO",    "market": "NewYork", "close_time": "04:00"},
-        "BNO":    {"symbol": "BNO",    "market": "NewYork", "close_time": "04:00"},
-        "USO":    {"symbol": "USO",    "market": "NewYork", "close_time": "04:00"},
+date_str = datetime.now().strftime("%Y%m%d")
+output_csv = f"output/qdii_market_close_{date_str}.csv"
+output_xlsx = output_csv.replace(".csv", ".xlsx")
 
-        # 香港/首尔市场
-        "3175.HK":{"symbol": "3175.HK","market": "Seoul",   "close_time": "14:30"},
-    }
+log(f"目标日期: {date_str}")
 
-    os.makedirs("output", exist_ok=True)
-    date_str = datetime.now().strftime("%Y%m%d")
-    output_file = f"output/qdii_market_close_{date_str}.csv"
-    xlsx_file = output_file.replace('.csv', '.xlsx')
+os.makedirs("output", exist_ok=True)
+results = []
+errors = []
 
-    log("开始获取各市场收盘价（北京时间）...")
+for ticker, cfg in tickers_config.items():
+    market = cfg["market"]
+    log(f"\n--- {ticker} ({market}) ---")
 
-    results = []
-    errors = []
+    try:
+        df = yf.download(
+            ticker,
+            period="5d",
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            timeout=20
+        )
 
-    for name, cfg in tickers_config.items():
-        symbol = cfg["symbol"]
-        market = cfg["market"]
-        base_close_time = cfg["close_time"]
+        if df.empty:
+            log(f"  × 下载为空")
+            errors.append(f"{ticker}: download empty")
+            continue
 
-        log(f"  → {name:8} ({market}) ", end="")
+        log(f"  数据行数: {len(df)}, 最新日期: {df.index[-1]}")
 
-        try:
-            # 下载日线
-            df = yf.download(
-                symbol,
-                period="60d",
-                interval="1d",
-                auto_adjust=True,
-                progress=False,
-                timeout=20
-            )
+        # 确保是 UTC
+        if df.index.tz is None:
+            df.index = pd.to_datetime(df.index).tz_localize("UTC")
+        else:
+            df.index = df.index.tz_convert("UTC")
 
-            if df.empty:
-                log("× 无数据")
-                errors.append(f"{name}: 无数据")
-                continue
+        # 提取 Close 列（处理 MultiIndex）
+        if isinstance(df.columns, pd.MultiIndex):
+            close = df["Close"].squeeze()
+        else:
+            close = df["Close"].squeeze()
 
-            # 保留 Close 列并确保是单层列名
-            if isinstance(df.columns, pd.MultiIndex):
-                df = df["Close"]
-            else:
-                df = df[['Close']].squeeze()
+        latest_dt = df.index[-1]
+        latest_close = float(close.iloc[-1])
 
-            # 严格转为北京时间
-            if df.index.tz is None:
-                df.index = pd.to_datetime(df.index).tz_localize('UTC')
-            df.index = df.index.tz_convert('Asia/Shanghai')
+        log(f"  最新收盘: {latest_close} @ {latest_dt}")
+        results.append({
+            "Date": str(latest_dt.date()),
+            "Ticker": ticker,
+            "Close_Price": latest_close,
+            "Market": market,
+        })
+        log(f"  ✓ 成功")
 
-            # 获取最近一天
-            latest_date = df.index.max().date()
+    except Exception as e:
+        tb = traceback.format_exc()
+        log(f"  × 错误: {e}")
+        log(f"    {tb.strip()}")
+        errors.append(f"{ticker}: {e}")
 
-            # 处理纽约夏令时
-            if market == "NewYork":
-                hour = 4 if is_us_summer_time(latest_date) else 5
-                target_str = f"{latest_date} {hour:02d}:00:00+08:00"
-            else:
-                target_str = f"{latest_date} {base_close_time}:00:00+08:00"
+log(f"\n=== 结果: {len(results)}/{len(tickers_config)} 成功 ===")
 
-            target = pd.to_datetime(target_str)
+if errors:
+    log(f"失败: {errors}")
 
-            # 提取价格：优先用 asof，fallback 到最新可用数据
-            close_price = df.asof(target)
+if results:
+    df_result = pd.DataFrame(results)
+    df_pivot = df_result.pivot(index="Date", columns="Ticker", values="Close_Price")
+    df_pivot.index.name = "Date"
 
-            if pd.notna(close_price):
-                log(f"✓ {close_price:.4f} @ {target.strftime('%H:%M')} (数据日期: {latest_date})")
-                results.append({
-                    'Date': latest_date,
-                    'Ticker': name,
-                    'Close_Price': float(close_price),
-                    'Market': market,
-                    'Close_Time_BJT': target.strftime('%H:%M')
-                })
-            else:
-                # Fallback：直接取当天的收盘价
-                today_data = df[df.index.date == latest_date]
-                if not today_data.empty:
-                    close_price = float(today_data.iloc[-1])
-                    log(f"✓ {close_price:.4f} @ {latest_date} (fallback，直接取收盘)")
-                    results.append({
-                        'Date': latest_date,
-                        'Ticker': name,
-                        'Close_Price': close_price,
-                        'Market': market,
-                        'Close_Time_BJT': 'fallback'
-                    })
-                else:
-                    log("× 价格为空")
-                    errors.append(f"{name}: 价格为空")
+    df_pivot.to_csv(output_csv, encoding="utf-8-sig")
+    log(f"CSV 保存: {output_csv}")
 
-        except Exception as e:
-            tb = traceback.format_exc()
-            log(f"× 错误: {e}")
-            errors.append(f"{name}: {e}")
-            log(f"  Stack: {tb.strip()}")
+    try:
+        df_pivot.to_excel(output_xlsx)
+        log(f"XLSX 保存: {output_xlsx}")
+    except Exception as e:
+        log(f"XLSX 保存失败: {e}")
 
-    # 生成结果
-    log(f"\n本次处理结果: {len(results)}/{len(tickers_config)} 成功")
-    if errors:
-        log(f"失败列表: {errors}")
-
-    if results:
-        df_result = pd.DataFrame(results)
-        df_pivot = df_result.pivot(index='Date', columns='Ticker', values='Close_Price')
-
-        df_pivot.to_csv(output_file, encoding='utf-8-sig')
-        log(f"CSV 已保存: {output_file}")
-
-        try:
-            df_pivot.to_excel(xlsx_file)
-            log(f"XLSX 已保存: {xlsx_file}")
-        except Exception as e:
-            log(f"XLSX 保存失败（无需处理）: {e}")
-
-        log(f"\n最新收盘价预览:")
-        preview = df_pivot.tail(5).round(4)
-        log(str(preview))
-        log("\n✅ 完成!")
-    else:
-        log("\n❌ 未获取到任何数据，请检查日志")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    fetch_market_close_prices()
+    log(f"\n{df_pivot.round(4).to_string()}")
+    log("\n✅ 完成")
+else:
+    log("\n❌ 全部失败，退出")
+    sys.exit(1)
