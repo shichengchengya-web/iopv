@@ -1,49 +1,71 @@
+# get_market_close_prices_final.py
 import yfinance as yf
 import pandas as pd
-import os
 from datetime import datetime, timedelta
 import pytz
-import time
-import random
+import os
 
-def fetch_qdii_daily():
-    tickers = {
-        "CRUD.L": "CRUD.L", "BRNT.L": "BRNT.L",
-        "DBO": "DBO", "BNO": "BNO", "USO": "USO",
-        "IAU": "IAU", "GLD": "GLD", "AAAU": "AAAU",
-        "SGOL": "SGOL", "FTGC": "FTGC", "BCD": "BCD", "SLV": "SLV",
-        "hf_CL": "CL=F", "hf_OIL": "BZ=F", "hf_GC": "GC=F", "hf_SI": "SI=F"
+def is_us_summer_time(dt):
+    """判断是否为美国夏令时（简单版）"""
+    return 3 < dt.month < 11
+
+def fetch_market_close_prices():
+    """
+    按各市场真实收盘时间提取价格（用于 T-1 净值计算）
+    """
+    tickers_config = {
+        # 伦敦 LSE ≈ 北京时间 00:30
+        "CRUD.L": {"symbol": "CRUD.L", "market": "London",  "close_time": "00:30"},
+        "BRNT.L": {"symbol": "BRNT.L", "market": "London",  "close_time": "00:30"},
+        
+        # 纽约 NYSE
+        "DBO":    {"symbol": "DBO",    "market": "NewYork", "close_time": "04:00"},  # 夏令时
+        "BNO":    {"symbol": "BNO",    "market": "NewYork", "close_time": "04:00"},
+        "USO":    {"symbol": "USO",    "market": "NewYork", "close_time": "04:00"},
+        
+        # 香港/首尔
+        "3175.HK":{"symbol": "3175.HK","market": "Seoul",   "close_time": "14:30"},
     }
 
     os.makedirs("output", exist_ok=True)
-    bj_tz = pytz.timezone('Asia/Shanghai')
-    bj_now = datetime.now(bj_tz)
-    output_file = os.path.join("output", "qdii_daily_latest.csv")
+    date_str = datetime.now().strftime("%Y%m%d")
+    output_file = f"output/qdii_market_close_{date_str}.csv"
 
-    end_date = bj_now
-    start_date = end_date - timedelta(days=60)
+    print("开始获取各市场收盘价...\n")
 
-    new_data_list = []
-    for name, symbol in tickers.items():
+    results = []
+    for name, cfg in tickers_config.items():
+        symbol = cfg["symbol"]
+        market = cfg["market"]
+        close_time = cfg["close_time"]
+        
+        print(f"  → {name:8} ({market}) ", end="")
+        
         try:
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(start=start_date, end=end_date, interval="1d")
-            if df.empty: continue
+            # 下载日线
+            df = yf.download(
+                symbol,
+                period="60d",
+                interval="1d",
+                auto_adjust=True,
+                progress=False
+            )
+            
+            if df.empty:
+                print("× 无数据")
+                continue
+
             df = df[['Close']].copy()
-            df.index = df.index.tz_convert('Asia/Shanghai').normalize()
-            df.columns = [name]
-            new_data_list.append(df)
-            time.sleep(random.uniform(0.5, 1.0))
-        except Exception: pass
+            
+            # 转为北京时间
+            if df.index.tz is None:
+                df.index = pd.to_datetime(df.index).tz_localize('UTC')
+            df.index = df.index.tz_convert('Asia/Shanghai')
 
-    if not new_data_list: return
-
-    combined = pd.concat(new_data_list, axis=1)
-    combined = combined.sort_index(ascending=True).ffill()
-    combined.index = combined.index.strftime('%Y-%m-%d 00:00:00+08:00')
-    combined.index.name = 'Datetime'
-    combined.to_csv(output_file)
-    print("Done. Output: output/qdii_daily_latest.csv")
-
-if __name__ == "__main__":
-    fetch_qdii_daily()
+            # 提取最近一天对应收盘时间的价格
+            latest_date = df.index.max().date()
+            
+            # 纽约夏令时切换
+            if market == "NewYork":
+                hour = 4 if is_us_summer_time(latest_date) else 5
+                target
