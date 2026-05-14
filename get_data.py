@@ -1,118 +1,223 @@
-# get_market_close_prices_final.py
-import yfinance as yf
-import pandas as pd
-from datetime import datetime
-import pytz
+# -*- coding: utf-8 -*-
+
 import os
-import traceback
 import sys
+import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
-LOG_FILE = "output/fetch_log.txt"
+import pandas as pd
+import yfinance as yf
+from requests import Session
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-def log(msg=""):
-    print(msg)
-    os.makedirs("output", exist_ok=True)
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(f"[{datetime.now().isoformat()}] {msg}\n")
 
-log("=" * 50)
-log("开始获取 QDII 数据")
-log("=" * 50)
+# =========================================================
+# 基础配置
+# =========================================================
 
-tickers_config = {
-    # 伦敦 LSE (北京 00:30 → UTC 前一天 16:30)
-    "CRUD.L":  {"market": "London",  "close_utc_hour": 16, "close_utc_min": 30},
-    "BRNT.L":  {"market": "London",  "close_utc_hour": 16, "close_utc_min": 30},
-    # 纽约 NYSE (北京 04:00 → UTC 前一天 20:00， 夏令时 19:00)
-    "DBO":     {"market": "NewYork", "close_utc_hour": 20, "close_utc_min": 0,  "dst": True},
-    "BNO":     {"market": "NewYork", "close_utc_hour": 20, "close_utc_min": 0,  "dst": True},
-    "USO":     {"market": "NewYork", "close_utc_hour": 20, "close_utc_min": 0,  "dst": True},
-    # 首尔/香港
-    "3175.HK": {"market": "Seoul",   "close_utc_hour": 5,  "close_utc_min": 30},
+OUTPUT_DIR = "output"
+LOG_FILE = f"{OUTPUT_DIR}/fetch_log.txt"
+
+MAX_WORKERS = 5
+RETRY_TIMES = 3
+DOWNLOAD_PERIOD = "10d"
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+# =========================================================
+# Ticker 配置
+# =========================================================
+
+TICKERS = {
+    "CRUD.L": "London",
+    "BRNT.L": "London",
+    "DBO": "NewYork",
+    "BNO": "NewYork",
+    "USO": "NewYork",
+    "3175.HK": "HongKong",
 }
 
-date_str = datetime.now().strftime("%Y%m%d")
-output_csv = f"output/qdii_market_close_{date_str}.csv"
-output_xlsx = output_csv.replace(".csv", ".xlsx")
 
-log(f"目标日期: {date_str}")
+# =========================================================
+# 日志
+# =========================================================
 
-os.makedirs("output", exist_ok=True)
-results = []
-errors = []
+def log(msg=""):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    text = f"[{now}] {msg}"
 
-for ticker, cfg in tickers_config.items():
-    market = cfg["market"]
-    log(f"\n--- {ticker} ({market}) ---")
+    print(text)
 
-    try:
-        df = yf.download(
-            ticker,
-            period="5d",
-            interval="1d",
-            auto_adjust=True,
-            progress=False,
-            timeout=20
-        )
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(text + "\n")
 
-        if df.empty:
-            log(f"  × 下载为空")
-            errors.append(f"{ticker}: download empty")
-            continue
 
-        log(f"  数据行数: {len(df)}, 最新日期: {df.index[-1]}")
+# =========================================================
+# 创建带重试 Session
+# =========================================================
 
-        # 确保是 UTC
-        if df.index.tz is None:
-            df.index = pd.to_datetime(df.index).tz_localize("UTC")
-        else:
-            df.index = df.index.tz_convert("UTC")
+def create_session():
 
-        # 提取 Close 列（处理 MultiIndex）
-        if isinstance(df.columns, pd.MultiIndex):
-            close = df["Close"].squeeze()
-        else:
-            close = df["Close"].squeeze()
+    session = Session()
 
-        latest_dt = df.index[-1]
-        latest_close = float(close.iloc[-1])
+    retries = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"]
+    )
 
-        log(f"  最新收盘: {latest_close} @ {latest_dt}")
-        results.append({
-            "Date": str(latest_dt.date()),
-            "Ticker": ticker,
-            "Close_Price": latest_close,
-            "Market": market,
-        })
-        log(f"  ✓ 成功")
+    adapter = HTTPAdapter(max_retries=retries)
 
-    except Exception as e:
-        tb = traceback.format_exc()
-        log(f"  × 错误: {e}")
-        log(f"    {tb.strip()}")
-        errors.append(f"{ticker}: {e}")
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
 
-log(f"\n=== 结果: {len(results)}/{len(tickers_config)} 成功 ===")
+    return session
 
-if errors:
-    log(f"失败: {errors}")
 
-if results:
+session = create_session()
+
+
+# =========================================================
+# 下载单个 ticker
+# =========================================================
+
+def fetch_ticker(ticker, market):
+
+    for attempt in range(1, RETRY_TIMES + 1):
+
+        try:
+
+            log(f"[{ticker}] 开始下载 (第 {attempt} 次)")
+
+            df = yf.download(
+                ticker,
+                period=DOWNLOAD_PERIOD,
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+                timeout=20,
+                threads=False,
+                session=session
+            )
+
+            if df.empty:
+                raise Exception("返回数据为空")
+
+            # 统一时间索引
+            if df.index.tz is None:
+                df.index = pd.to_datetime(df.index).tz_localize("UTC")
+            else:
+                df.index = df.index.tz_convert("UTC")
+
+            # 兼容 MultiIndex
+            close_col = df["Close"]
+
+            if isinstance(close_col, pd.DataFrame):
+                close_series = close_col.iloc[:, 0]
+            else:
+                close_series = close_col
+
+            latest_dt = df.index[-1]
+            latest_close = float(close_series.iloc[-1])
+
+            log(f"[{ticker}] 成功: {latest_close}")
+
+            return {
+                "Date": str(latest_dt.date()),
+                "Ticker": ticker,
+                "Market": market,
+                "Close_Price": round(latest_close, 6),
+            }
+
+        except Exception as e:
+
+            log(f"[{ticker}] 失败: {e}")
+
+            if attempt == RETRY_TIMES:
+                traceback_str = traceback.format_exc()
+                log(traceback_str)
+
+            time.sleep(2)
+
+    return None
+
+
+# =========================================================
+# 主程序
+# =========================================================
+
+def main():
+
+    log("=" * 60)
+    log("开始获取 QDII 收盘数据")
+    log("=" * 60)
+
+    results = []
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+
+        futures = {
+            executor.submit(fetch_ticker, ticker, market): ticker
+            for ticker, market in TICKERS.items()
+        }
+
+        for future in as_completed(futures):
+
+            ticker = futures[future]
+
+            try:
+                result = future.result()
+
+                if result:
+                    results.append(result)
+
+            except Exception as e:
+                log(f"[{ticker}] Future 异常: {e}")
+
+    # =====================================================
+    # 输出结果
+    # =====================================================
+
+    if not results:
+
+        log("全部获取失败")
+        sys.exit(1)
+
     df_result = pd.DataFrame(results)
-    df_pivot = df_result.pivot(index="Date", columns="Ticker", values="Close_Price")
-    df_pivot.index.name = "Date"
 
-    df_pivot.to_csv(output_csv, encoding="utf-8-sig")
-    log(f"CSV 保存: {output_csv}")
+    df_pivot = df_result.pivot_table(
+        index="Date",
+        columns="Ticker",
+        values="Close_Price"
+    )
+
+    date_str = datetime.now().strftime("%Y%m%d")
+
+    csv_path = f"{OUTPUT_DIR}/qdii_market_close_{date_str}.csv"
+    xlsx_path = f"{OUTPUT_DIR}/qdii_market_close_{date_str}.xlsx"
+
+    df_pivot.to_csv(csv_path, encoding="utf-8-sig")
 
     try:
-        df_pivot.to_excel(output_xlsx)
-        log(f"XLSX 保存: {output_xlsx}")
+        df_pivot.to_excel(xlsx_path)
     except Exception as e:
-        log(f"XLSX 保存失败: {e}")
+        log(f"Excel 保存失败: {e}")
 
-    log(f"\n{df_pivot.round(4).to_string()}")
-    log("\n✅ 完成")
-else:
-    log("\n❌ 全部失败，退出")
-    sys.exit(1)
+    log("")
+    log(df_pivot.round(4).to_string())
+
+    log("")
+    log(f"CSV:  {csv_path}")
+    log(f"XLSX: {xlsx_path}")
+
+    log("")
+    log(f"完成: 成功 {len(results)} / 总计 {len(TICKERS)}")
+
+
+if __name__ == "__main__":
+    main()
