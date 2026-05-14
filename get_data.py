@@ -57,32 +57,6 @@ def log(msg=""):
 
 
 # =========================================================
-# 创建带重试 Session
-# =========================================================
-
-def create_session():
-
-    session = Session()
-
-    retries = Retry(
-        total=3,
-        backoff_factor=1,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"]
-    )
-
-    adapter = HTTPAdapter(max_retries=retries)
-
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-
-    return session
-
-
-session = create_session()
-
-
-# =========================================================
 # 下载单个 ticker
 # =========================================================
 
@@ -101,8 +75,7 @@ def fetch_ticker(ticker, market):
                 auto_adjust=True,
                 progress=False,
                 timeout=20,
-                threads=False,
-                session=session
+                threads=False
             )
 
             if df.empty:
