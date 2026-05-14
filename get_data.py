@@ -27,6 +27,8 @@ def fetch_qdii_daily():
         "FTGC": "FTGC",
         "BCD": "BCD",
         "SLV": "SLV",
+        # 香港交易所
+        "3175.HK": "3175.HK",        
         # 期货锚点 (用于计算实时偏移)
         "hf_CL": "CL=F",
         "hf_OIL": "BZ=F",
