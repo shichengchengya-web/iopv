@@ -60,7 +60,7 @@ def fetch_qdii_daily():
 
     # Stock ETF: 60 days daily data
     end_dt   = bj_today
-    start_dt = end_dt - timedelta(days=90)
+    start_dt = end_dt - timedelta(days=10)  # 7 trading days + buffer
 
     print(f"[{bj_today.strftime('%Y-%m-%d %H:%M:%S')}] Fetching ETF daily data...")
     etf_daily = {}
