@@ -108,8 +108,8 @@ def fetch_qdii_daily():
         ny_close  = ny_close_time(bj_dt)
 
         for market, close_bj in [("HK", hk_close), ("LSE", lse_close), ("NY", ny_close)]:
-            # All three rows use the SAME trading day T as date label
-            # The close_bj timestamp differs, but all belong to the same T-day close
+            if close_bj > bj_today:
+                continue
             date_label = bj_dt.strftime("%Y-%m-%d")
 
             row = {"Date": date_label, "Market": market}
