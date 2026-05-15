@@ -22,7 +22,8 @@ def ny_close_time(bj_date: datetime) -> datetime:
     year = ny_dt.year
     dst_start = datetime(year, 3, 8) + timedelta(days=(6 - datetime(year, 3, 8).weekday()))
     dst_end   = datetime(year, 11, 1) + timedelta(days=(6 - datetime(year, 11, 1).weekday()))
-    in_dst = dst_start <= ny_dt < dst_end
+    ny_dt_naive = ny_dt.replace(tzinfo=None)
+    in_dst = dst_start <= ny_dt_naive < dst_end
     h = NY_HOUR_SUMMER if in_dst else NY_HOUR_WINTER
     return bj_date.replace(hour=h, minute=0, second=0, microsecond=0)
 
