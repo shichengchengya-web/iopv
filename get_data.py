@@ -96,7 +96,7 @@ def fetch_qdii_daily():
 
     # Build trading days from ETF daily data
     ref = list(etf_daily.values())[0]
-    all_dates = sorted(set(ref.index.normalize().date))[-60:]
+    all_dates = sorted(set(ref.index.normalize().date))
 
     rows = []
     for bj_date in all_dates:
