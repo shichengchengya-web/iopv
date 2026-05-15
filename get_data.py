@@ -20,14 +20,7 @@ def fetch_qdii_daily():
         "DBO": "DBO",
         "BNO": "BNO",
         "USO": "USO",
-        "3175.HK": "3175.HK",    # Samsung Oil ETF
-        "IAU": "IAU",
-        "GLD": "GLD",
-        "AAAU": "AAAU",
-        "SGOL": "SGOL",
-        "FTGC": "FTGC",
-        "BCD": "BCD",
-        "SLV": "SLV",
+        "3175.HK": "3175.HK"   # Samsung Oil ETF
     }
 
     os.makedirs("output", exist_ok=True)
