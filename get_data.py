@@ -40,8 +40,8 @@ def nearest_price(df_series: pd.Series, target_bj: datetime) -> float:
     if df_series.empty:
         return None
     s = df_series.sort_index()
-    # index - datetime -> TimedeltaIndex, call total_seconds() then abs() then idxmin()
-    diffs = pd.Series((s.index - target_bj).total_seconds().astype('float').abs(), index=s.index)
+    diffs = pd.Series((s.index - target_bj).total_seconds(), index=s.index)
+    diffs = diffs.abs()
     return float(s.loc[diffs.idxmin()])
 
 
