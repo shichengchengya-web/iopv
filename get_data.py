@@ -6,23 +6,36 @@ import pytz
 import time
 import random
 
-# Market close times in Beijing timezone
-# HK:  16:00 Beijing same day
-# LSE: 00:30 Beijing next day
-# NY:  04:00 Winter / 05:00 Summer Beijing next day
-
+# Market close times in Beijing
 HK_HOUR, HK_MIN = 16, 0
 LSE_HOUR, LSE_MIN = 0, 30
 NY_HOUR_WINTER = 4
 NY_HOUR_SUMMER = 5
 
+HK_TZ  = pytz.timezone('Asia/Hong_Kong')
+BJ_TZ  = pytz.timezone('Asia/Shanghai')
+
+ETF_LIST = [
+    "CRUD.L", "BRNT.L", "DBO", "BNO", "USO",
+    "3175.HK", "IAU", "GLD", "AAAU", "SGOL", "FTGC", "BCD", "SLV"
+]
+FUT_LIST = ["CL=F", "BZ=F"]
+
+# Which ETF markets close when (in Beijing time on their trading day T)
+ETF_MARKETS = {
+    "HK":  ["3175.HK"],                          # HK stock
+    "LSE": ["CRUD.L", "BRNT.L"],                # London stocks
+    "NY":  ["DBO", "BNO", "USO", "IAU", "GLD",  # US stocks
+            "AAAU", "SGOL", "FTGC", "BCD", "SLV"]
+}
+
+# All ETFs available in NY window (NY close is last, so has all)
+ALL_ETFS = ETF_LIST
+
 
 def ny_close_time(bj_date: datetime) -> datetime:
-    """Return NY close time in Beijing, with DST awareness."""
-    # NY = Beijing - 13h (EST) or -12h (EDT)
     ny_dt = bj_date - timedelta(hours=13)
     ny_dt_naive = ny_dt.replace(tzinfo=None)
-    # US DST: 2nd Sunday March - 1st Sunday November
     dst_start = datetime(ny_dt.year, 3, 8) + timedelta(days=(6 - datetime(ny_dt.year, 3, 8).weekday()))
     dst_end   = datetime(ny_dt.year, 11, 1) + timedelta(days=(6 - datetime(ny_dt.year, 11, 1).weekday()))
     in_dst = dst_start <= ny_dt_naive < dst_end
@@ -39,89 +52,98 @@ def lse_close_time(bj_date: datetime) -> datetime:
 
 
 def nearest_price(series: pd.Series, target: datetime) -> float:
-    """Find the nearest price to target from a datetime-indexed series."""
+    """Find the nearest price <= target from a datetime-indexed series."""
     if series.empty:
         return None
     s = series.sort_index()
-    diffs = pd.Series((s.index - target).total_seconds(), index=s.index)
-    diffs = diffs.abs()
-    return float(s.loc[diffs.idxmin()])
+    available = s[s.index <= target]
+    if available.empty:
+        return None
+    return round(float(available.iloc[-1]), 4)
+
+
+def fetch_up_to(sym: str, end_dt: datetime) -> pd.Series:
+    start_dt = end_dt - timedelta(days=20)
+    try:
+        df = yf.Ticker(sym).history(start=start_dt, end=end_dt, interval="1d")
+        if df.empty:
+            return pd.Series(dtype=float)
+        return df['Close'].tz_convert('Asia/Shanghai')
+    except Exception:
+        return pd.Series(dtype=float)
+
+
+def fetch_fut_up_to(sym: str, end_dt: datetime) -> pd.Series:
+    start_dt = end_dt - timedelta(days=10)
+    try:
+        df = yf.Ticker(sym).history(start=start_dt, end=end_dt, interval="30m")
+        if df.empty:
+            return pd.Series(dtype=float)
+        return df['Close']
+    except Exception:
+        return pd.Series(dtype=float)
 
 
 def fetch_qdii_daily():
-    bj_tz = pytz.timezone('Asia/Shanghai')
-    bj_today = datetime.now(bj_tz)
+    bj_tz   = pytz.timezone('Asia/Shanghai')
+    bj_now  = datetime.now(bj_tz)
+    today   = bj_now.date()
 
-    etf_list = [
-        "CRUD.L", "BRNT.L", "DBO", "BNO", "USO",
-        "3175.HK", "IAU", "GLD", "AAAU", "SGOL", "FTGC", "BCD", "SLV"
-    ]
-    fut_list = ["CL=F", "BZ=F"]
-
-    # Stock ETF: 60 days daily data
-    end_dt   = bj_today
-    start_dt = end_dt - timedelta(days=10)  # 7 trading days + buffer
-
-    print(f"[{bj_today.strftime('%Y-%m-%d %H:%M:%S')}] Fetching ETF daily data...")
-    etf_daily = {}
-    for sym in etf_list:
+    # Fetch all ETF daily data once (up to today's close)
+    etf_data = {}
+    for sym in ETF_LIST:
         print(f"  {sym}...", end=" ", flush=True)
-        try:
-            df = yf.Ticker(sym).history(start=start_dt, end=end_dt, interval="1d")
-            if df.empty:
-                print("no data"); continue
-            etf_daily[sym] = df['Close'].tz_convert('Asia/Shanghai')
-            print(f"OK ({len(df)} rows)")
-        except Exception as e:
-            print(f"Error: {e}")
+        data = fetch_up_to(sym, bj_now)
+        if not data.empty:
+            etf_data[sym] = data
+            print(f"OK ({len(data)} rows)")
+        else:
+            print("no data")
         time.sleep(random.uniform(1.5, 3.0))
 
-    # Futures: 7 days 30min data
-    print(f"\n[{bj_today.strftime('%Y-%m-%d %H:%M:%S')}] Fetching futures 30min data...")
-    fut_30m = {}
-    for sym in fut_list:
+    # Fetch all futures 30min data once (up to now)
+    fut_data = {}
+    for sym in FUT_LIST:
         print(f"  {sym}...", end=" ", flush=True)
-        try:
-            df = yf.Ticker(sym).history(period="7d", interval="30m")
-            if df.empty:
-                print("no data"); continue
-            fut_30m[sym] = df['Close']
-            print(f"OK ({len(df)} rows)")
-        except Exception as e:
-            print(f"Error: {e}")
+        data = fetch_fut_up_to(sym, bj_now)
+        if not data.empty:
+            fut_data[sym] = data
+            print(f"OK ({len(data)} rows)")
+        else:
+            print("no data")
         time.sleep(random.uniform(2.0, 4.0))
 
-    if not etf_daily:
+    if not etf_data:
         print("Error: No ETF data fetched."); return
 
-    # Build trading days from ETF daily data
-    ref = list(etf_daily.values())[0]
+    # Build trading days from first ETF
+    ref = list(etf_data.values())[0]
     all_dates = sorted(set(ref.index.normalize().date))
+    # Only keep dates strictly before today (fully closed)
+    all_dates = [d for d in all_dates if d < today]
 
     rows = []
     for bj_date in all_dates:
         bj_dt = datetime.combine(bj_date, datetime.min.time(), tzinfo=bj_tz)
 
-        # Three close times in Beijing
         hk_close  = hk_close_time(bj_dt)
         lse_close = lse_close_time(bj_dt)
         ny_close  = ny_close_time(bj_dt)
 
         for market, close_bj in [("HK", hk_close), ("LSE", lse_close), ("NY", ny_close)]:
-            # Only emit rows for trading days fully in the past
-            if bj_dt.date() >= bj_today.date():
+            row = {"Date": bj_dt.strftime("%Y-%m-%d"), "Market": market}
+
+            # Only emit if this market's close time is in the past
+            if close_bj > bj_now:
                 continue
-            date_label = bj_dt.strftime("%Y-%m-%d")
 
-            row = {"Date": date_label, "Market": market}
+            # ETF: nearest price <= close_bj (uses data fetched up to bj_now)
+            for sym in ETF_LIST:
+                row[sym] = nearest_price(etf_data.get(sym, pd.Series(dtype=float)), close_bj)
 
-            # ETF: nearest daily close to this market's close time
-            for sym in etf_list:
-                row[sym] = nearest_price(etf_daily[sym], close_bj) if sym in etf_daily else None
-
-            # Futures: nearest 30min close to this market's close time
-            for sym in fut_list:
-                row[sym] = nearest_price(fut_30m[sym], close_bj) if sym in fut_30m else None
+            # Futures: nearest 30min price <= close_bj
+            for sym in FUT_LIST:
+                row[sym] = nearest_price(fut_data.get(sym, pd.Series(dtype=float)), close_bj)
 
             rows.append(row)
 
