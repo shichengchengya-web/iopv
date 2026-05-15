@@ -108,7 +108,8 @@ def fetch_qdii_daily():
         ny_close  = ny_close_time(bj_dt)
 
         for market, close_bj in [("HK", hk_close), ("LSE", lse_close), ("NY", ny_close)]:
-            if close_bj > bj_today:
+            # Only emit rows for trading days fully in the past
+            if bj_dt.date() >= bj_today.date():
                 continue
             date_label = bj_dt.strftime("%Y-%m-%d")
 
