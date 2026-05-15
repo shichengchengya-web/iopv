@@ -40,8 +40,9 @@ def nearest_price(df_series: pd.Series, target_bj: datetime) -> float:
     if df_series.empty:
         return None
     s = df_series.sort_index()
-    diffs = (s.index - target_bj).total_seconds().abs()
-    return float(s.loc[diffs.idxmin()])
+    diffs = s.index - target_bj
+    diffs_ns = diffs.astype('int64').abs()
+    return float(s.iloc[diffs_ns.argmin()])
 
 
 def fetch_qdii_daily():
